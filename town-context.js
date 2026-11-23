@@ -1,0 +1,31 @@
+import * as T from './vendor/three.module.js';
+export function addTownContext({scene,geo,mat,box,G}){
+ const data=window.QT_CONTEXT,groups={town:new T.Group(),roads:new T.Group(),highway:new T.Group(),metro:new T.Group(),rail:new T.Group()};Object.values(groups).forEach(g=>scene.add(g));
+ const bounds={left:-100,right:60,top:-70,bottom:58};
+ const within=p=>p.x>=bounds.left&&p.x<=bounds.right&&p.z>=bounds.top&&p.z<=bounds.bottom;
+ // Clip each segment to the scene boundary, retaining true OSM road geometry.
+ function clip(a,b){let t0=0,t1=1;const dx=b.x-a.x,dz=b.z-a.z;for(const [p,q]of[[-dx,a.x-bounds.left],[dx,bounds.right-a.x],[-dz,a.z-bounds.top],[dz,bounds.bottom-a.z]]){if(p===0){if(q<0)return null;continue}const r=q/p;if(p<0){if(r>t1)return null;t0=Math.max(t0,r)}else{if(r<t0)return null;t1=Math.min(t1,r)}}return[new T.Vector3(a.x+t0*dx,0,a.z+t0*dz),new T.Vector3(a.x+t1*dx,0,a.z+t1*dz)]}
+ function ribbons(lines,width,color,height,group){const out=[];for(const points of lines)for(let i=1;i<points.length;i++){const seg=clip(geo(points[i-1]),geo(points[i]));if(!seg)continue;const[a,b]=seg,dx=b.x-a.x,dz=b.z-a.z,len=Math.hypot(dx,dz);if(len<.001)continue;const nx=-dz/len*width/2,nz=dx/len*width/2;const p=[[a.x+nx,height,a.z+nz],[a.x-nx,height,a.z-nz],[b.x+nx,height,b.z+nz],[b.x-nx,height,b.z-nz]];for(const j of[0,2,1,1,2,3])out.push(...p[j])}const geometry=new T.BufferGeometry();geometry.setAttribute('position',new T.Float32BufferAttribute(out,3));geometry.computeVertexNormals();const mesh=new T.Mesh(geometry,new T.MeshStandardMaterial({color,roughness:1,side:T.DoubleSide}));mesh.receiveShadow=true;group.add(mesh);return mesh}
+ const townRoads=data.roads.filter(r=>r.ref!=='1'),highway=data.roads.filter(r=>r.ref==='1');
+ const major=townRoads.filter(r=>['secondary','tertiary'].includes(r.kind)),minor=townRoads.filter(r=>!major.includes(r));
+ ribbons(minor.map(r=>r.points),.58,'#899083',.055,groups.roads);ribbons(major.map(r=>r.points),1.1,'#777e74',.065,groups.roads);
+ ribbons(highway.map(r=>r.points),2.0,'#c4ab73',.085,groups.highway);ribbons(highway.map(r=>r.points),1.5,'#6c776f',.10,groups.highway);ribbons(highway.map(r=>r.points),.08,'#f0c878',.12,groups.highway);
+ const mappedFootprints=[];
+ function polygon(points,color,height,group){const p=points.map(geo);if(p.length<3||p.some(v=>!within(v)))return;const shape=new T.Shape(p.map(v=>new T.Vector2(v.x,-v.z)));let geometry;if(height>0){geometry=new T.ExtrudeGeometry(shape,{depth:height,bevelEnabled:false});geometry.rotateX(-Math.PI/2)}else{geometry=new T.ShapeGeometry(shape);geometry.rotateX(-Math.PI/2)}const mesh=new T.Mesh(geometry,mat(color));mesh.position.y=height?0.07:.028;mesh.castShadow=height>0;mesh.receiveShadow=true;group.add(mesh)}
+ data.areas.forEach(a=>polygon(a.points,['retail','commercial'].includes(a.kind)?'#b8b29b':a.kind==='industrial'?'#a3aaa0':'#b3b5a1',0,groups.town));
+ data.buildings.forEach((b,i)=>{const points=b.points.map(geo),center=points.reduce((a,v)=>a.add(v),new T.Vector3()).multiplyScalar(1/points.length);if(points.some(p=>!within(p)))return;if(center.x>-31&&center.z>-25&&center.z<18)return;const height=Math.min(6,Math.max(1.5,(parseFloat(b.height)||((parseFloat(b.levels)||2)*3))*.16));polygon(b.points,['#c2c0ae','#d1c9b0','#a5b2a5'][i%3],height,groups.town);mappedFootprints.push(b.points)});
+ const inside=(x,z,points)=>{let c=false;for(let i=0,j=points.length-1;i<points.length;j=i++){const a=geo(points[i]),b=geo(points[j]);if((a.z>z)!==(b.z>z)&&x<(b.x-a.x)*(z-a.z)/(b.z-a.z)+a.x)c=!c}return c};
+ const segDist=(x,z,a,b)=>{const dx=b.x-a.x,dz=b.z-a.z,t=Math.max(0,Math.min(1,((x-a.x)*dx+(z-a.z)*dz)/(dx*dx+dz*dz||1)));return Math.hypot(x-a.x-t*dx,z-a.z-t*dz)};
+ const roadSegments=data.roads.flatMap(r=>r.points.slice(1).map((p,i)=>[geo(r.points[i]),geo(p)]));
+ // Where only land-use polygons exist, use neutral massing, never claim these as measured footprints.
+ const volumes=[];for(let z=-65;z<52;z+=1.9)for(let x=-96;x<-31;x+=1.9){if(!data.areas.some(a=>a.kind!=='industrial'&&inside(x,z,a.points)))continue;if(mappedFootprints.some(p=>inside(x,z,p)))continue;if(roadSegments.some(([a,b])=>segDist(x,z,a,b)<.65))continue;volumes.push([x,z])}
+ const townGeo=new T.BoxGeometry(1,1,1),blocks=new T.InstancedMesh(townGeo,mat('#c6c2ad'),volumes.length),m=new T.Matrix4();volumes.forEach(([x,z],i)=>{const h=1.7+(i%4)*.6;m.compose(new T.Vector3(x,h/2+.05,z),new T.Quaternion(),new T.Vector3(1.2,h,1.3));blocks.setMatrixAt(i,m)});blocks.castShadow=true;blocks.receiveShadow=true;groups.town.add(blocks);
+ ribbons(G.tra, .62,'#706e63',.17,groups.rail);ribbons(G.tra,.14,'#c9c9b8',.23,groups.rail);
+ ribbons(G.mrt.slice(0,1),1.05,'#b8bdb1',.85,groups.metro);ribbons(G.mrt.slice(0,1),.25,'#b94c46',.93,groups.metro);
+ const metroPoints=G.mrt[0].map(geo).filter(within);for(let i=0;i<metroPoints.length;i+=5){const p=metroPoints[i];box(p.x,.4,p.z,.22,.8,.25,'#c3c4b8',groups.metro)}
+ data.stations.forEach(s=>{const p=geo(s.point);box(p.x,1.3,p.z,2.0,1,5,'#d2cfbb',groups.metro);box(p.x,1.9,p.z,2.4,.2,5.6,'#b64d47',groups.metro);box(p.x,1.37,p.z+2.52,1.5,.32,.04,'#6c8077',groups.metro)});
+ const metroTrain=new T.Group();for(let i=0;i<3;i++){box(0,.3,i*1.5,.7,.55,1.35,'#eee9d7',metroTrain);box(0,.27,i*1.5,.73,.13,1.38,'#b94c46',metroTrain)}groups.metro.add(metroTrain);const curve=metroPoints.length>1?new T.CatmullRomCurve3(metroPoints):null;
+ const contextLabels=[['橋頭既有市鎮','街廓與建物量體',22.7567,120.3060],['橋頭老街','既有商業街區',22.7575,120.3096],['台 1 線・舊省道','成功路／成功南路',22.7513,120.3137],['橋頭火車站 R23','捷運／臺鐵轉乘',22.7609322,120.3106932]];
+ function bindLayerControls(){document.querySelectorAll('[data-map-layer]').forEach(input=>input.onchange=()=>groups[input.dataset.mapLayer].visible=input.checked)}
+ bindLayerControls();return{labels:contextLabels,labelVisible(title){if(title.includes('R23')||title==='橋頭糖廠站'||title==='青埔站')return groups.metro.visible;if(title.startsWith('台 1'))return groups.highway.visible;if(title==='橋頭既有市鎮'||title==='橋頭老街')return groups.town.visible;return true},update(ms){if(!curve)return;const t=(ms*.000022)%1,p=curve.getPoint(t),d=curve.getTangent(t);metroTrain.position.copy(p).add(new T.Vector3(0,1.1,0));metroTrain.rotation.y=Math.atan2(d.x,d.z)},counts:{roads:data.roads.length,buildings:data.buildings.length,areas:data.areas.length,illustrativeBlocks:volumes.length}};
+}
