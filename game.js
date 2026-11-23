@@ -1,7 +1,7 @@
-import './layout.js';
+import './layout.js?v=24';
 import * as T from './vendor/three.module.js';
-import {createEcology} from './ecology.js';
-import {addTownContext} from './town-context.js';
+import {createEcology} from './ecology.js?v=24';
+import {addTownContext} from './town-context.js?v=24';
 let ecology=null,nightView=false,overview=true;
 const $=s=>document.querySelector(s),G=window.QT_GEO,N=26,S=4,W=N*S,geo=p=>new T.Vector3((p[1]-120.320)*4800,0,(22.752-p[0])*5200);
 const scene=new T.Scene();scene.background=new T.Color('#b8cdc1');scene.fog=new T.Fog('#b8cdc1',250,650);
